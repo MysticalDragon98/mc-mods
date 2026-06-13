@@ -1,0 +1,17 @@
+{
+  "name": "mc-mods",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI for creating, building, installing, and uninstalling personal Fabric mods.",
+  "type": "commonjs",
+  "bin": {
+    "mc-mods": "build/mc-mods"
+  },
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
