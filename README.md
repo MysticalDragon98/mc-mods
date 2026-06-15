@@ -2,13 +2,13 @@
 
 CLI for creating and managing personal Fabric mods on this machine.
 
-## Build
+## Executable
 
 ```sh
-npm run build
+./build/mc-mods --help
 ```
 
-The executable is emitted at `build/mc-mods`.
+The executable lives at `build/mc-mods`.
 
 ## Usage
 
