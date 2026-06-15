@@ -14,6 +14,7 @@ const DEFAULT_LOOM_VERSION = "1.17.11";
 const DEFAULT_GRADLE_VERSION = "9.4.1";
 const FABRIC_LOADER_URL = "https://meta.fabricmc.net/v2/versions/loader";
 const FABRIC_GAME_URL = "https://meta.fabricmc.net/v2/versions/game";
+const GRADLE_VERSIONS_URL = "https://services.gradle.org/versions/all";
 const FABRIC_LOOM_METADATA_URL =
   "https://maven.fabricmc.net/net/fabricmc/fabric-loom/net.fabricmc.fabric-loom.gradle.plugin/maven-metadata.xml";
 
@@ -26,16 +27,21 @@ Usage:
   mc-mods build [name] [--root <dir>]
   mc-mods install [name] [--root <dir>] [--target <global|version>] [--game-dir <dir>] [--yes]
   mc-mods uninstall [name] [--root <dir>] [--target <global|version>] [--game-dir <dir>] [--all] [--yes]
+  mc-mods env
+  mc-mods update-env
 
 Commands:
   init       Create a Fabric mod project under the mc-mods config folder and open it in VS Code when available.
   build      Run Gradle and update mod.yml with the produced jar path.
   install    Copy the built jar into the detected Minecraft/TLauncher mods folder.
   uninstall  Remove the installed jar from the detected Minecraft/TLauncher mods folder.
+  env        Display the current Minecraft environment.
+  update-env Update the Minecraft environment to the latest available versions.
 
 Options:
   --loader-version <version>  Override the Fabric Loader version used by init.
   --loom-version <version>    Override the Fabric Loom version used by init.
+  --gradle-version <version>  Override the Gradle version used by init.
   --path <dir>                Create a project at an exact path instead of <root>/<id>.
   --version                   Print the CLI version.
   --help                      Show this help.
@@ -121,6 +127,10 @@ function defaultConfigDir(options = {}) {
 
 function defaultProjectRoot(options = {}) {
   return path.join(defaultConfigDir(options), "mods");
+}
+
+function settingsFilePath(options = {}) {
+  return path.join(defaultConfigDir(options), "mc-mods.yml");
 }
 
 function slugify(value) {
@@ -231,6 +241,133 @@ function parseConfigText(text) {
   }
 
   return config;
+}
+
+function defaultMinecraftEnvironment() {
+  return {
+    minecraftVersion: DEFAULT_MINECRAFT_VERSION,
+    fabricVersion: DEFAULT_LOADER_VERSION,
+    gradleVersion: DEFAULT_GRADLE_VERSION,
+    loomVersion: DEFAULT_LOOM_VERSION
+  };
+}
+
+function parseSettingsText(text) {
+  const settings = {};
+  let section = null;
+
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+
+    const sectionMatch = /^([A-Za-z0-9_-]+):\s*$/.exec(trimmed);
+    if (sectionMatch && !line.startsWith(" ")) {
+      section = sectionMatch[1];
+      settings[section] = settings[section] ?? {};
+      continue;
+    }
+
+    const match = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(trimmed);
+    if (!match) {
+      continue;
+    }
+
+    let value = match[2].trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+
+    if (section && line.startsWith(" ")) {
+      settings[section][match[1]] = value;
+    } else {
+      settings[match[1]] = value;
+      section = null;
+    }
+  }
+
+  return settings;
+}
+
+function normalizeMinecraftEnvironment(env = {}) {
+  return {
+    ...defaultMinecraftEnvironment(),
+    ...env
+  };
+}
+
+function formatSettings(settings) {
+  const env = normalizeMinecraftEnvironment(settings.env);
+  return [
+    "env:",
+    `  minecraftVersion: ${formatYamlScalar(env.minecraftVersion)}`,
+    `  fabricVersion: ${formatYamlScalar(env.fabricVersion)}`,
+    `  gradleVersion: ${formatYamlScalar(env.gradleVersion)}`,
+    `  loomVersion: ${formatYamlScalar(env.loomVersion)}`,
+    ""
+  ].join("\n");
+}
+
+function readSettings(filePath = settingsFilePath()) {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
+
+  return parseSettingsText(fs.readFileSync(filePath, "utf8"));
+}
+
+function writeSettings(settings, filePath = settingsFilePath()) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, formatSettings(settings));
+}
+
+async function fetchLatestGradleVersion() {
+  const versions = await fetchJson(GRADLE_VERSIONS_URL);
+  const selected =
+    versions.find((version) => version.current && version.final && !version.broken) ??
+    versions.find((version) => version.released && version.final && !version.broken);
+
+  if (!selected?.version) {
+    throw new Error("Gradle metadata did not include a version");
+  }
+
+  return selected.version;
+}
+
+async function fetchLatestMinecraftEnvironment() {
+  const fallback = defaultMinecraftEnvironment();
+
+  return {
+    minecraftVersion: await fetchLatestGameVersion().catch(() => fallback.minecraftVersion),
+    fabricVersion: await fetchLatestLoaderVersion().catch(() => fallback.fabricVersion),
+    gradleVersion: await fetchLatestGradleVersion().catch(() => fallback.gradleVersion),
+    loomVersion: await fetchLatestLoomVersion().catch(() => fallback.loomVersion)
+  };
+}
+
+async function ensureSettingsFile(options = {}) {
+  const filePath = options.filePath ?? settingsFilePath();
+  const existing = readSettings(filePath);
+  const exists = fs.existsSync(filePath);
+  const defaults = defaultMinecraftEnvironment();
+  const shouldRefresh = options.refresh || !existing.env;
+  const hasMissingEnvValue =
+    existing.env &&
+    Object.keys(defaults).some((key) => !Object.prototype.hasOwnProperty.call(existing.env, key));
+  const env = shouldRefresh
+    ? await fetchLatestMinecraftEnvironment()
+    : normalizeMinecraftEnvironment(existing.env);
+  const settings = { ...existing, env };
+
+  if (!exists || shouldRefresh || hasMissingEnvValue) {
+    writeSettings(settings, filePath);
+  }
+
+  return settings;
 }
 
 function readModConfig(projectDir) {
@@ -464,7 +601,7 @@ async function resolveFabricVersions(options) {
     minecraftVersion: options.minecraftVersion,
     loaderVersion,
     loomVersion,
-    gradleVersion: DEFAULT_GRADLE_VERSION
+    gradleVersion: options.gradleVersion ?? DEFAULT_GRADLE_VERSION
   };
 }
 
@@ -745,6 +882,7 @@ async function commandInit(parsed) {
     throw new Error("init requires a mod name");
   }
 
+  const env = normalizeMinecraftEnvironment(parsed.settings?.env);
   const id = normalizeModId(parsed.options.id ?? name);
   const projectRoot = path.resolve(
     expandHome(parsed.options.root ?? defaultProjectRoot())
@@ -752,18 +890,12 @@ async function commandInit(parsed) {
   const projectDir = path.resolve(
     expandHome(parsed.options.path ?? path.join(projectRoot, id))
   );
-  const gameDir = path.resolve(
-    expandHome(parsed.options["game-dir"] ?? detectTLauncherGameDir())
-  );
-  const detectedMinecraftVersion = detectMinecraftVersion(gameDir);
-  const minecraftVersion =
-    parsed.options["minecraft-version"] ??
-    detectedMinecraftVersion ??
-    (await fetchLatestGameVersion().catch(() => DEFAULT_MINECRAFT_VERSION));
+  const minecraftVersion = parsed.options["minecraft-version"] ?? env.minecraftVersion;
   const versions = await resolveFabricVersions({
     minecraftVersion,
-    loaderVersion: parsed.options["loader-version"],
-    loomVersion: parsed.options["loom-version"]
+    loaderVersion: parsed.options["loader-version"] ?? env.fabricVersion,
+    loomVersion: parsed.options["loom-version"] ?? env.loomVersion,
+    gradleVersion: parsed.options["gradle-version"] ?? env.gradleVersion
   });
   const packageName = parsed.options.package ?? packageFromId(id);
   const className = classNameFromId(id);
@@ -975,9 +1107,28 @@ function uninstallFileNames(config, builtName) {
   return [...names];
 }
 
+function formatEnvironment(env) {
+  const normalized = normalizeMinecraftEnvironment(env);
+  return [
+    `Minecraft Version: ${normalized.minecraftVersion}`,
+    `Fabric Version: ${normalized.fabricVersion}`,
+    `Gradle Version: ${normalized.gradleVersion}`,
+    `Loom Version: ${normalized.loomVersion}`
+  ].join("\n");
+}
+
+function commandEnv(parsed) {
+  console.log(formatEnvironment(parsed.settings?.env));
+}
+
+async function commandUpdateEnv(parsed) {
+  console.log(formatEnvironment(parsed.settings.env));
+}
+
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   const parsed = parseArgv(rest);
+  parsed.settings = await ensureSettingsFile({ refresh: command === "update-env" });
 
   if (!command || command === "help" || command === "--help" || command === "-h" || parsed.options.help) {
     console.log(usage());
@@ -1009,30 +1160,53 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "env") {
+    commandEnv(parsed);
+    return;
+  }
+
+  if (command === "update-env") {
+    await commandUpdateEnv(parsed);
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
 const api = {
   classNameFromId,
   commandExists,
+  commandEnv,
+  commandUpdateEnv,
   defaultConfigDir,
+  defaultMinecraftEnvironment,
   defaultProjectRoot,
   detectMinecraftVersion,
   detectTLauncherGameDir,
   discoverInstallTargets,
+  ensureSettingsFile,
+  fetchLatestGradleVersion,
+  fetchLatestMinecraftEnvironment,
   findBuiltJar,
+  formatEnvironment,
   formatModConfig,
+  formatSettings,
   javaReleaseForMinecraft,
   listInstalledVersions,
   main,
   normalizeModId,
+  normalizeMinecraftEnvironment,
   packageFromId,
   parseArgv,
   parseConfigText,
+  parseSettingsText,
   readProperties,
+  readSettings,
   resolveFabricVersions,
+  settingsFilePath,
   slugify,
   targetFromName,
+  writeSettings,
   writeFabricProject
 };
 
