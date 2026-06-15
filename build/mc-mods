@@ -8,7 +8,6 @@ const readline = require("node:readline/promises");
 const { spawnSync } = require("node:child_process");
 
 const TOOL_VERSION = "0.1.0";
-const DEFAULT_PROJECT_ROOT = path.join(os.homedir(), "src", "mc-mods");
 const DEFAULT_MINECRAFT_VERSION = "26.1.2";
 const DEFAULT_LOADER_VERSION = "0.19.3";
 const DEFAULT_LOOM_VERSION = "1.17.11";
@@ -29,7 +28,7 @@ Usage:
   mc-mods uninstall [name] [--root <dir>] [--target <global|version>] [--game-dir <dir>] [--all] [--yes]
 
 Commands:
-  init       Create a Fabric mod project under $HOME/src/mc-mods and open it in VS Code.
+  init       Create a Fabric mod project under the mc-mods config folder and open it in VS Code when available.
   build      Run Gradle and update mod.yml with the produced jar path.
   install    Copy the built jar into the detected Minecraft/TLauncher mods folder.
   uninstall  Remove the installed jar from the detected Minecraft/TLauncher mods folder.
@@ -102,6 +101,26 @@ function expandHome(input) {
   }
 
   return input;
+}
+
+function defaultConfigDir(options = {}) {
+  const home = options.home ?? os.homedir();
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+
+  if (platform === "darwin") {
+    return path.join(home, "Library", "Application Support", "mc-mods");
+  }
+
+  if (platform === "win32") {
+    return path.join(env.APPDATA ?? path.join(home, "AppData", "Roaming"), "mc-mods");
+  }
+
+  return path.join(home, ".config", "mc-mods");
+}
+
+function defaultProjectRoot(options = {}) {
+  return path.join(defaultConfigDir(options), "mods");
 }
 
 function slugify(value) {
@@ -727,7 +746,9 @@ async function commandInit(parsed) {
   }
 
   const id = normalizeModId(parsed.options.id ?? name);
-  const projectRoot = path.resolve(expandHome(parsed.options.root ?? DEFAULT_PROJECT_ROOT));
+  const projectRoot = path.resolve(
+    expandHome(parsed.options.root ?? defaultProjectRoot())
+  );
   const projectDir = path.resolve(
     expandHome(parsed.options.path ?? path.join(projectRoot, id))
   );
@@ -782,7 +803,7 @@ function resolveProjectPath(name, options) {
     return direct;
   }
 
-  const root = path.resolve(expandHome(options.root ?? DEFAULT_PROJECT_ROOT));
+  const root = path.resolve(expandHome(options.root ?? defaultProjectRoot()));
   const byId = path.join(root, normalizeModId(name));
   if (fs.existsSync(path.join(byId, "mod.yml"))) {
     return byId;
@@ -994,6 +1015,8 @@ async function main(argv = process.argv.slice(2)) {
 const api = {
   classNameFromId,
   commandExists,
+  defaultConfigDir,
+  defaultProjectRoot,
   detectMinecraftVersion,
   detectTLauncherGameDir,
   discoverInstallTargets,
