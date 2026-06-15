@@ -37,6 +37,7 @@ Usage:
   mc-mods help
   mc-mods fetch <git-url> [--root <dir>]
   mc-mods update <name> [--root <dir>]
+  mc-mods download <git-url> [--root <dir>] [--target <global|version>] [--game-dir <dir>] [--yes]
 
 Commands:
   init       Create a Fabric mod project under the mc-mods config folder and open it with the configured editor when available.
@@ -52,6 +53,7 @@ Commands:
   help       Show this help.
   fetch      Clone a git repository into the mc-mods config folder.
   update     Pull the latest changes for a git-backed mod project.
+  download   Clone, build, and install a git-backed mod project.
 
 Options:
   --loader-version <version>  Override the Fabric Loader version used by init.
@@ -1124,6 +1126,7 @@ function commandFetch(parsed) {
   fs.mkdirSync(root, { recursive: true });
   runGit(["clone", gitUrl, projectDir]);
   console.log(`Fetched ${projectDir}`);
+  return projectDir;
 }
 
 function commandUpdate(parsed) {
@@ -1139,6 +1142,22 @@ function commandUpdate(parsed) {
 
   runGit(["pull"], { cwd: projectDir });
   console.log(`Updated ${projectDir}`);
+}
+
+async function commandDownload(parsed) {
+  const gitUrl = parsed.positionals.join(" ").trim();
+  if (!gitUrl) {
+    throw new Error("download requires a git url");
+  }
+
+  const projectDir = commandFetch(parsed);
+  const nextParsed = {
+    ...parsed,
+    positionals: [projectDir]
+  };
+
+  commandBuild(nextParsed);
+  await commandInstall(nextParsed);
 }
 
 function findBuiltJar(projectDir) {
@@ -1528,12 +1547,18 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "download") {
+    await commandDownload(parsed);
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
 const api = {
   classNameFromId,
   commandExists,
+  commandDownload,
   commandEnv,
   commandFetch,
   commandOpen,

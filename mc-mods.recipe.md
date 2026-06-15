@@ -53,6 +53,7 @@ The minecraft environment is stored under the **Settings File** as the `env` pro
    11. **help:** Displays the command help
    12. **fetch {git url}:** Clones via git url a repository into `{Config Folder}/mods/{name}`, if the folder already exists, abort
    13. **update {name}:** Goes to the `{Config Folder}/mods/{name}` folder and run git pull.  If it's not a git repository, abort.
+   14. **download {git-url}:** Fetches and installs a mod via its git url
 
 ## Notes
 
