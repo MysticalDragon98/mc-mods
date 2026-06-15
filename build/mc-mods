@@ -34,6 +34,9 @@ Usage:
   mc-mods unset-path
   mc-mods open <name> [--root <dir>]
   mc-mods set-editor <editor>
+  mc-mods help
+  mc-mods fetch <git-url> [--root <dir>]
+  mc-mods update <name> [--root <dir>]
 
 Commands:
   init       Create a Fabric mod project under the mc-mods config folder and open it with the configured editor when available.
@@ -46,6 +49,9 @@ Commands:
   unset-path Remove the saved PATH installation and clear the reference from settings.
   open       Open an existing mod project with the configured editor.
   set-editor Save the editor command used by init and open.
+  help       Show this help.
+  fetch      Clone a git repository into the mc-mods config folder.
+  update     Pull the latest changes for a git-backed mod project.
 
 Options:
   --loader-version <version>  Override the Fabric Loader version used by init.
@@ -637,6 +643,37 @@ function openProjectInEditor(projectDir, settings, options = {}) {
   return true;
 }
 
+function runGit(args, options = {}) {
+  if (!commandExists("git")) {
+    throw new Error("git is required for this command");
+  }
+
+  const result = spawnSync("git", args, {
+    cwd: options.cwd,
+    stdio: options.stdio ?? "inherit"
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed`);
+  }
+}
+
+function gitRepositoryName(gitUrl) {
+  const trimmed = String(gitUrl).trim().replace(/[?#].*$/, "").replace(/\/+$/, "");
+  const lastPart = trimmed.split(/[/:]/).filter(Boolean).pop();
+  const name = lastPart?.replace(/\.git$/i, "");
+
+  if (!name) {
+    throw new Error("Could not determine repository name from git url");
+  }
+
+  return normalizeModId(name);
+}
+
 async function fetchText(url) {
   if (typeof fetch !== "function") {
     throw new Error("fetch is not available in this Node version");
@@ -1016,6 +1053,7 @@ async function commandInit(parsed) {
     loader: versions.loaderVersion,
     loom: versions.loomVersion
   });
+  runGit(["init", "--quiet"], { cwd: projectDir });
 
   if (parsed.options.open !== false) {
     openProjectInEditor(projectDir, parsed.settings);
@@ -1043,6 +1081,21 @@ function resolveProjectPath(name, options) {
   throw new Error(`Could not find a mod project for "${name}"`);
 }
 
+function resolveRepositoryPath(name, options) {
+  const direct = path.resolve(expandHome(name));
+  if (fs.existsSync(direct)) {
+    return direct;
+  }
+
+  const root = path.resolve(expandHome(options.root ?? defaultProjectRoot()));
+  const byId = path.join(root, normalizeModId(name));
+  if (fs.existsSync(byId)) {
+    return byId;
+  }
+
+  throw new Error(`Could not find a repository for "${name}"`);
+}
+
 function commandOpen(parsed) {
   const name = parsed.positionals.join(" ").trim();
   if (!name) {
@@ -1052,6 +1105,40 @@ function commandOpen(parsed) {
   const projectDir = resolveProjectPath(name, parsed.options);
   openProjectInEditor(projectDir, parsed.settings, { required: true });
   console.log(`Opened ${projectDir}`);
+}
+
+function commandFetch(parsed) {
+  const gitUrl = parsed.positionals.join(" ").trim();
+  if (!gitUrl) {
+    throw new Error("fetch requires a git url");
+  }
+
+  const root = path.resolve(expandHome(parsed.options.root ?? defaultProjectRoot()));
+  const name = gitRepositoryName(gitUrl);
+  const projectDir = path.join(root, name);
+
+  if (fs.existsSync(projectDir)) {
+    throw new Error(`${projectDir} already exists`);
+  }
+
+  fs.mkdirSync(root, { recursive: true });
+  runGit(["clone", gitUrl, projectDir]);
+  console.log(`Fetched ${projectDir}`);
+}
+
+function commandUpdate(parsed) {
+  const name = parsed.positionals.join(" ").trim();
+  if (!name) {
+    throw new Error("update requires a mod name");
+  }
+
+  const projectDir = resolveRepositoryPath(name, parsed.options);
+  if (!fs.existsSync(path.join(projectDir, ".git"))) {
+    throw new Error(`${projectDir} is not a git repository`);
+  }
+
+  runGit(["pull"], { cwd: projectDir });
+  console.log(`Updated ${projectDir}`);
 }
 
 function findBuiltJar(projectDir) {
@@ -1431,6 +1518,16 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "fetch") {
+    commandFetch(parsed);
+    return;
+  }
+
+  if (command === "update") {
+    commandUpdate(parsed);
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -1438,10 +1535,12 @@ const api = {
   classNameFromId,
   commandExists,
   commandEnv,
+  commandFetch,
   commandOpen,
   commandSetEditor,
   commandSetPath,
   commandUnsetPath,
+  commandUpdate,
   commandUpdateEnv,
   defaultConfigDir,
   editorCommand,
@@ -1457,6 +1556,7 @@ const api = {
   formatEnvironment,
   formatModConfig,
   formatSettings,
+  gitRepositoryName,
   javaReleaseForMinecraft,
   listInstalledVersions,
   main,
@@ -1471,6 +1571,7 @@ const api = {
   readProperties,
   readSettings,
   resolveFabricVersions,
+  resolveRepositoryPath,
   settingsFilePath,
   splitCommandLine,
   slugify,

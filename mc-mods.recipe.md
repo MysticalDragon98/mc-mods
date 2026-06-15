@@ -40,7 +40,7 @@ The minecraft environment is stored under the **Settings File** as the `env` pro
 1. Read the context from https://docs.fabricmc.net
 2. Analyze how the TLauncher is installed in this machine in order to properly setup the tool
 3. Create a cli tool at `./build` that has the following commands
-   1. **init {name}:** Create a new project at `{Config Folder}/mods` and opens it with the **editor** command if available, and creates a mod.yml in that folder with the mod name
+   1. **init {name}:** Create a new project at `{Config Folder}/mods` and opens it with the **editor** command if available, and creates a mod.yml in that folder with the mod name and initializes a git repository
    2. **build [name]:** Builds the mod and generates the jar and updates the mod.yml with the build property pointing to the resulting jar, if name is not provided read the name from the mod.yml in the current folder
    3. **install [name]:** Installs the mod in a minecraft version, if there are more than one version installed let the user pick where to install, if name is not provided read the name from the mod.yml in the current folder
    4. **uninstall [name]:** Uninstalls the mod in a minecraft version, follow the same rules as install command, if name is not provided read the name from the mod.yml in the current folder
@@ -50,6 +50,9 @@ The minecraft environment is stored under the **Settings File** as the `env` pro
    8. **unset-path:** Removes the installed file in path so its not available to be used in the terminal, also removes the property from the **Settings File**
    9. **open {name}:** Opens the project at `{Config Folder}/mods/{name}` with the **editor**
    10. **set-editor {editor}:** Sets the **editor** to the provided command
+   11. **help:** Displays the command help
+   12. **fetch {git url}:** Clones via git url a repository into `{Config Folder}/mods/{name}`, if the folder already exists, abort
+   13. **update {name}:** Goes to the `{Config Folder}/mods/{name}` folder and run git pull.  If it's not a git repository, abort.
 
 ## Notes
 
