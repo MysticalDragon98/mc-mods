@@ -20,7 +20,10 @@ The repository must follow the following exact directory structure with no excep
 - **MacOS:** ~/Library/Application Support/mc-mods
 - **Windows:** %APPDATA%\mc-mods
 
-**Settings File:** {Config folder}/mc-mods.yml
+**Settings File:** {Config folder}/mc-mods.yml and contains the following properties
+
+- **env:** Contains the minecraft environment
+- **path:** Contains any reference to the symlink or location to where the cli tool is installed in the PATH, this is used to uninstall later
 
 **Minecraft Environment:**
 
@@ -42,6 +45,8 @@ The minecraft environment is stored under the **Settings File** as the `env` pro
    4. **uninstall [name]:** Uninstalls the mod in a minecraft version, follow the same rules as install command, if name is not provided read the name from the mod.yml in the current folder
    5. **env:** Displays the current **Minecraft Environment**
    6. **update-env:** Updates the **Minecraft Environment** to the latest available
+   7. **set-path:** Installs the build file in path depending of the OS config and saves the created reference in the **Settings File**
+   8. **unset-path:** Removes the installed file in path so its not available to be used in the terminal, also removes the property from the **Settings File**
 
 ## Notes
 

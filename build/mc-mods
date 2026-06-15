@@ -29,6 +29,8 @@ Usage:
   mc-mods uninstall [name] [--root <dir>] [--target <global|version>] [--game-dir <dir>] [--all] [--yes]
   mc-mods env
   mc-mods update-env
+  mc-mods set-path
+  mc-mods unset-path
 
 Commands:
   init       Create a Fabric mod project under the mc-mods config folder and open it in VS Code when available.
@@ -37,6 +39,8 @@ Commands:
   uninstall  Remove the installed jar from the detected Minecraft/TLauncher mods folder.
   env        Display the current Minecraft environment.
   update-env Update the Minecraft environment to the latest available versions.
+  set-path   Install this CLI into a user PATH location and save the reference in settings.
+  unset-path Remove the saved PATH installation and clear the reference from settings.
 
 Options:
   --loader-version <version>  Override the Fabric Loader version used by init.
@@ -302,14 +306,20 @@ function normalizeMinecraftEnvironment(env = {}) {
 
 function formatSettings(settings) {
   const env = normalizeMinecraftEnvironment(settings.env);
-  return [
+  const lines = [
     "env:",
     `  minecraftVersion: ${formatYamlScalar(env.minecraftVersion)}`,
     `  fabricVersion: ${formatYamlScalar(env.fabricVersion)}`,
     `  gradleVersion: ${formatYamlScalar(env.gradleVersion)}`,
     `  loomVersion: ${formatYamlScalar(env.loomVersion)}`,
     ""
-  ].join("\n");
+  ];
+
+  if (settings.path) {
+    lines.push(`path: ${formatYamlScalar(settings.path)}`, "");
+  }
+
+  return lines.join("\n");
 }
 
 function readSettings(filePath = settingsFilePath()) {
@@ -1125,6 +1135,121 @@ async function commandUpdateEnv(parsed) {
   console.log(formatEnvironment(parsed.settings.env));
 }
 
+function pathEntries() {
+  return (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter(Boolean)
+    .map((entry) => path.resolve(expandHome(entry)));
+}
+
+function isDirectoryWritable(directory) {
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+    fs.accessSync(directory, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function defaultUserBinDir() {
+  if (process.platform === "win32") {
+    return path.join(process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"), "npm");
+  }
+
+  return path.join(os.homedir(), ".local", "bin");
+}
+
+function resolvePathInstallDir() {
+  const home = path.resolve(os.homedir());
+  const userPathDir = pathEntries().find((entry) => {
+    const relative = path.relative(home, entry);
+    return (
+      relative &&
+      !relative.startsWith("..") &&
+      !path.isAbsolute(relative) &&
+      isDirectoryWritable(entry)
+    );
+  });
+
+  return userPathDir ?? defaultUserBinDir();
+}
+
+function isCommandDirInPath(directory) {
+  const resolved = path.resolve(directory);
+  return pathEntries().some((entry) => entry === resolved);
+}
+
+function assertCanWritePathInstall(installPath, sourcePath, savedPath) {
+  if (!fs.existsSync(installPath)) {
+    return;
+  }
+
+  if (savedPath && path.resolve(savedPath) === path.resolve(installPath)) {
+    return;
+  }
+
+  const stat = fs.lstatSync(installPath);
+  if (stat.isSymbolicLink() && fs.realpathSync(installPath) === sourcePath) {
+    return;
+  }
+
+  throw new Error(`${installPath} already exists and is not managed by mc-mods`);
+}
+
+function commandSetPath(parsed) {
+  const installDir = resolvePathInstallDir();
+  const executableName = process.platform === "win32" ? "mc-mods.cmd" : "mc-mods";
+  const installPath = path.join(installDir, executableName);
+  const sourcePath = path.resolve(__filename);
+
+  fs.mkdirSync(installDir, { recursive: true });
+  assertCanWritePathInstall(installPath, sourcePath, parsed.settings?.path);
+
+  if (process.platform === "win32") {
+    writeFile(
+      installPath,
+      `@echo off\r\nnode "${sourcePath}" %*\r\n`
+    );
+  } else {
+    try {
+      fs.rmSync(installPath, { force: true });
+      fs.symlinkSync(sourcePath, installPath);
+    } catch {
+      fs.copyFileSync(sourcePath, installPath);
+    }
+    fs.chmodSync(installPath, 0o755);
+  }
+
+  const settings = {
+    ...parsed.settings,
+    path: installPath
+  };
+  writeSettings(settings);
+  parsed.settings = settings;
+
+  console.log(`Installed ${installPath}`);
+  if (!isCommandDirInPath(installDir)) {
+    console.log(`${installDir} is not currently in PATH`);
+  }
+}
+
+function commandUnsetPath(parsed) {
+  const installPath = parsed.settings?.path;
+  if (!installPath) {
+    console.log("No PATH installation is saved in settings");
+    return;
+  }
+
+  fs.rmSync(installPath, { force: true });
+  const settings = { ...parsed.settings };
+  delete settings.path;
+  writeSettings(settings);
+  parsed.settings = settings;
+
+  console.log(`Removed ${installPath}`);
+}
+
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   const parsed = parseArgv(rest);
@@ -1170,6 +1295,16 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "set-path") {
+    commandSetPath(parsed);
+    return;
+  }
+
+  if (command === "unset-path") {
+    commandUnsetPath(parsed);
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -1177,6 +1312,8 @@ const api = {
   classNameFromId,
   commandExists,
   commandEnv,
+  commandSetPath,
+  commandUnsetPath,
   commandUpdateEnv,
   defaultConfigDir,
   defaultMinecraftEnvironment,
