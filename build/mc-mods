@@ -12,6 +12,7 @@ const DEFAULT_MINECRAFT_VERSION = "26.1.2";
 const DEFAULT_LOADER_VERSION = "0.19.3";
 const DEFAULT_LOOM_VERSION = "1.17.11";
 const DEFAULT_GRADLE_VERSION = "9.4.1";
+const DEFAULT_EDITOR = "code";
 const FABRIC_LOADER_URL = "https://meta.fabricmc.net/v2/versions/loader";
 const FABRIC_GAME_URL = "https://meta.fabricmc.net/v2/versions/game";
 const GRADLE_VERSIONS_URL = "https://services.gradle.org/versions/all";
@@ -31,9 +32,11 @@ Usage:
   mc-mods update-env
   mc-mods set-path
   mc-mods unset-path
+  mc-mods open <name> [--root <dir>]
+  mc-mods set-editor <editor>
 
 Commands:
-  init       Create a Fabric mod project under the mc-mods config folder and open it in VS Code when available.
+  init       Create a Fabric mod project under the mc-mods config folder and open it with the configured editor when available.
   build      Run Gradle and update mod.yml with the produced jar path.
   install    Copy the built jar into the detected Minecraft/TLauncher mods folder.
   uninstall  Remove the installed jar from the detected Minecraft/TLauncher mods folder.
@@ -41,6 +44,8 @@ Commands:
   update-env Update the Minecraft environment to the latest available versions.
   set-path   Install this CLI into a user PATH location and save the reference in settings.
   unset-path Remove the saved PATH installation and clear the reference from settings.
+  open       Open an existing mod project with the configured editor.
+  set-editor Save the editor command used by init and open.
 
 Options:
   --loader-version <version>  Override the Fabric Loader version used by init.
@@ -304,19 +309,30 @@ function normalizeMinecraftEnvironment(env = {}) {
   };
 }
 
+function normalizeSettings(settings = {}) {
+  return {
+    ...settings,
+    env: normalizeMinecraftEnvironment(settings.env),
+    editor: settings.editor || DEFAULT_EDITOR
+  };
+}
+
 function formatSettings(settings) {
-  const env = normalizeMinecraftEnvironment(settings.env);
+  const normalized = normalizeSettings(settings);
+  const env = normalized.env;
   const lines = [
     "env:",
     `  minecraftVersion: ${formatYamlScalar(env.minecraftVersion)}`,
     `  fabricVersion: ${formatYamlScalar(env.fabricVersion)}`,
     `  gradleVersion: ${formatYamlScalar(env.gradleVersion)}`,
     `  loomVersion: ${formatYamlScalar(env.loomVersion)}`,
+    "",
+    `editor: ${formatYamlScalar(normalized.editor)}`,
     ""
   ];
 
-  if (settings.path) {
-    lines.push(`path: ${formatYamlScalar(settings.path)}`, "");
+  if (normalized.path) {
+    lines.push(`path: ${formatYamlScalar(normalized.path)}`, "");
   }
 
   return lines.join("\n");
@@ -368,12 +384,13 @@ async function ensureSettingsFile(options = {}) {
   const hasMissingEnvValue =
     existing.env &&
     Object.keys(defaults).some((key) => !Object.prototype.hasOwnProperty.call(existing.env, key));
+  const hasMissingEditor = !existing.editor;
   const env = shouldRefresh
     ? await fetchLatestMinecraftEnvironment()
     : normalizeMinecraftEnvironment(existing.env);
-  const settings = { ...existing, env };
+  const settings = normalizeSettings({ ...existing, env });
 
-  if (!exists || shouldRefresh || hasMissingEnvValue) {
+  if (!exists || shouldRefresh || hasMissingEnvValue || hasMissingEditor) {
     writeSettings(settings, filePath);
   }
 
@@ -546,6 +563,78 @@ function commandExists(command) {
         });
 
   return checker.status === 0;
+}
+
+function splitCommandLine(commandLine) {
+  const parts = [];
+  let current = "";
+  let quote = null;
+  let escaped = false;
+
+  for (const char of String(commandLine)) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (/\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = "";
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (escaped) {
+    current += "\\";
+  }
+
+  if (current) {
+    parts.push(current);
+  }
+
+  return parts;
+}
+
+function editorCommand(settings) {
+  return normalizeSettings(settings).editor;
+}
+
+function openProjectInEditor(projectDir, settings, options = {}) {
+  const editor = editorCommand(settings);
+  const [executable, ...editorArgs] = splitCommandLine(editor);
+  if (!executable || !commandExists(executable)) {
+    if (options.required) {
+      throw new Error(`Editor command is not available: ${editor}`);
+    }
+    return false;
+  }
+
+  spawnSync(executable, [...editorArgs, projectDir], { stdio: "ignore" });
+  return true;
 }
 
 async function fetchText(url) {
@@ -928,8 +1017,8 @@ async function commandInit(parsed) {
     loom: versions.loomVersion
   });
 
-  if (parsed.options.open !== false && commandExists("code")) {
-    spawnSync("code", [projectDir], { stdio: "ignore" });
+  if (parsed.options.open !== false) {
+    openProjectInEditor(projectDir, parsed.settings);
   }
 
   console.log(`Created ${projectDir}`);
@@ -952,6 +1041,17 @@ function resolveProjectPath(name, options) {
   }
 
   throw new Error(`Could not find a mod project for "${name}"`);
+}
+
+function commandOpen(parsed) {
+  const name = parsed.positionals.join(" ").trim();
+  if (!name) {
+    throw new Error("open requires a mod name");
+  }
+
+  const projectDir = resolveProjectPath(name, parsed.options);
+  openProjectInEditor(projectDir, parsed.settings, { required: true });
+  console.log(`Opened ${projectDir}`);
 }
 
 function findBuiltJar(projectDir) {
@@ -1250,6 +1350,22 @@ function commandUnsetPath(parsed) {
   console.log(`Removed ${installPath}`);
 }
 
+function commandSetEditor(parsed) {
+  const editor = parsed.positionals.join(" ").trim();
+  if (!editor) {
+    throw new Error("set-editor requires an editor command");
+  }
+
+  const settings = normalizeSettings({
+    ...parsed.settings,
+    editor
+  });
+  writeSettings(settings);
+  parsed.settings = settings;
+
+  console.log(`Editor set to ${editor}`);
+}
+
 async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
   const parsed = parseArgv(rest);
@@ -1305,6 +1421,16 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === "open") {
+    commandOpen(parsed);
+    return;
+  }
+
+  if (command === "set-editor") {
+    commandSetEditor(parsed);
+    return;
+  }
+
   throw new Error(`Unknown command: ${command}`);
 }
 
@@ -1312,10 +1438,13 @@ const api = {
   classNameFromId,
   commandExists,
   commandEnv,
+  commandOpen,
+  commandSetEditor,
   commandSetPath,
   commandUnsetPath,
   commandUpdateEnv,
   defaultConfigDir,
+  editorCommand,
   defaultMinecraftEnvironment,
   defaultProjectRoot,
   detectMinecraftVersion,
@@ -1333,6 +1462,8 @@ const api = {
   main,
   normalizeModId,
   normalizeMinecraftEnvironment,
+  normalizeSettings,
+  openProjectInEditor,
   packageFromId,
   parseArgv,
   parseConfigText,
@@ -1341,6 +1472,7 @@ const api = {
   readSettings,
   resolveFabricVersions,
   settingsFilePath,
+  splitCommandLine,
   slugify,
   targetFromName,
   writeSettings,
